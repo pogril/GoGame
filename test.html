@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title></title>
+	<style type="text/css">
+		
+		#target
+		{
+			width: 400px;
+			height: 400px;
+		}
+
+	</style>
+</head>
+
+<body>
+	<div id='target'>
+		<canvas id='board'></canvas>
+	</div>
+	<script type="text/javascript">
+		
+
+	const clone = function(object){
+
+		if(typeof(object) != "object"){
+			return object;
+		}
+
+		let output = object.constructor();
+
+		for(let x in object){
+			output[x] = clone(object[x])
+		}
+
+		return output;
+	}
+
+	const BoardState = function(obj) {
+
+		this.mode = obj.mode || this.defaultMode();
+		this.state = obj.state || this.initialState();
+	
+	}
+
+	BoardState.prototype = {
+
+		play: function(point){
+
+			//copy this object's state and generate next state 
+
+			let state = clone(this.state);
+
+			this.cache.store(state);
+			state.moves.push(point + " " + state.currentPlayer);
+
+			let groups = this.findGroups(state);
+
+			this.findLiberties(groups);
+
+			state.groups = groups;
+
+			let updated = this.doCaptures(state);
+			state.groups = updated.groups;
+			state.stones = updated.stones;
+			state.prisoners.black += updated.bprisoners;
+			state.prisoners.white += updated.wprisoners;
+
+			//state.territory = this.findTerritory(state);
+			state.currentPlayer == "black" ? state.currentPlayer = "white" : state.currentPlayer = "black";
+
+			return new BoardState({mode: this.mode, state: state});
+		},
+
+		findGroups: function(state){
+
+			const _this = this;
+
+			const recursiveSearch = function(stones,array,output){
+
+				if(stones.length > 0){
+
+					let next = [];
+
+					for(let stone of stones){
+						output.push(stone);
+					}
+
+					for(let item of output){
+
+						array.includes(item + 1) && !output.includes(item + 1) && (item + 1) % _this.mode.gsize !== 0 ?
+							next.push(item + 1) : false
+						
+
+						array.includes(item - _this.mode.gsize) && !output.includes(item - _this.mode.gsize) ?
+							next.push(item - _this.mode.gsize) : false
+						
+
+						array.includes(item - 1) && !output.includes(item - 1) && item % _this.mode.gsize !== 0 ? 
+							next.push(item - 1)  : false
+						
+
+						array.includes(item + _this.mode.gsize) && !output.includes(item + _this.mode.gsize) ?
+							next.push(item + _this.mode.gsize) : false
+					}
+
+					recursiveSearch(next,array,output);
+				}
+				else{
+					return output;
+				}
+
+				return Array.from( new Set(output) );
+			};
+
+			const gatherGroups = function(stones){ 
+
+				//returns an array of all groups on the board
+
+				let output = [],
+					wstones = [],
+					bstones = [],
+					checked = [];
+
+				for(let stone of stones){
+					stone.color == "black" ? bstones.push(stone.move) : wstones.push(stone.move);
+				};
+
+				while(bstones.length > 0){
+
+					let current = bstones.pop();
+
+					if(checked.includes(current)){
+						continue;
+					}
+					else{
+
+						let members = recursiveSearch([current],bstones,[]);
+						let group = {
+							members: members,
+							color: "black",
+							liberties: []
+						}
+
+						for(let member of group.members){
+							checked.push(member);
+						}
+
+						output.push(group);
+					}
+				};
+
+				while(wstones.length > 0){
+
+					let current = wstones.pop();
+
+					if(checked.includes(current)){
+						continue;
+					}
+					else{
+
+						let members = recursiveSearch([current],wstones,[]);
+						let group = {
+							members: members,
+							color: "white",
+							liberties: []
+							};
+
+						for(let member of group.members){
+							checked.push(member);
+						}
+
+						output.push(group);
+					}
+				};
+
+				return output;
+			};
+
+			let next = {
+				move: parseInt(state.moves[state.moves.length - 1].split(' ')[0]),
+				color: state.moves[state.moves.length - 1].split(' ')[1]
+			};
+
+			state.stones.push(next);
+
+			let groups = gatherGroups(state.stones);
+
+			return groups;
+
+		},
+
+		findLiberties: function(groups){
+
+			let adjacent = [];
+			let unit = this.mode.gsize;
+			let output = []; 
+
+			for(let group of groups){
+				for(let member of group.members){
+					adjacent.push(
+						member - unit >= 0 && !group.members.includes(member - unit) ? member - unit : undefined,
+						member + 1 < unit * unit && member % unit !== 0 && !group.members.includes(member + 1) ? member + 1 : undefined,
+						member + unit < unit * unit && !group.members.includes(member + unit) ? member + unit : undefined,
+						member - 1 >= 0 && member % unit !== 1 && !group.members.includes(member - 1) ? member - 1 : undefined
+					);
+				}
+
+				for(let item of adjacent){
+					if(item == undefined){
+						continue;
+					}
+					else{
+						output.push(item);
+					}
+				}
+				
+				group.liberties = Array.from( new Set(output) );
+				adjacent.length = 0;
+				output.length = 0;
+			}
+
+		},
+
+		doCaptures : function(state){
+
+			console.log(state);
+
+			const getnewStones = function(captured, played){
+
+				let output = [];
+
+				for(let stone of played){
+
+					let includes = 0;
+
+					for(let cap of captured){
+
+						if(stone.move == cap){
+							includes ++;
+						}
+					}
+
+					includes > 0 ? false : output.push(stone);
+					includes = 0;
+				}
+
+				return output;
+			}
+
+			let wstones = [],
+				bstones = [],
+				wprisoners = [],
+				bprisoners = [],
+				updatG = [],
+				updatS = [],
+				wn = 0,
+				bn = 0;
+
+			for(let group of state.groups){
+				for(let member of group.members){
+					group.color == "black" ? bstones.push(member) : wstones.push(member);
+				}
+			}
+
+			for(let group of state.groups){
+
+				console.log(group);
+
+				let liberties = [];
+
+				if(group.color == "black"){
+					for(let lib of group.liberties){
+						if(wstones.includes(lib)){
+							continue;
+						}
+						else{
+							liberties.push(lib);
+						}
+					}
+				}
+				else{
+					for(let lib of group.liberties){
+						if(bstones.includes(lib)){
+							continue;
+						}
+						else{
+							liberties.push(lib);
+						}
+					}
+				}
+
+				group.liberties = liberties;
+
+				if(group.liberties.length == 0){
+					group.color == "black" ? bprisoners.push(group.members) : wprisoners.push(group.members);
+				}
+				else{
+					updatG.push(group);
+				}
+			}
+
+			if(wprisoners > 0 || bprisoners > 0){
+				if(bprisoners.length > 0){
+					updatS = getnewStones(bprisoners, state.stones);
+				}
+				else{
+					updatS = getnewStones(wprisoners, state.stones);
+				}
+			}
+
+			for(let item of bprisoners){
+				wn += item.length;
+			}
+			for(let item of wprisoners){
+				bn += item.length;
+			}
+
+			return{
+				groups: updatG,
+				stones: updatS.length > 0 ? updatS : state.stones,
+				bprisoners: bn,
+				wprisoners: wn
+			}
+		},
+
+		findTerritory: function(state){
+
+			//find all points completely enclosed by a group
+
+			//TODO handle seki and find dead groups
+		},
+
+		defaultMode: function(){
+
+			let output = {
+
+				gsize: 19,
+				handicap: false,
+				isJoseki: false,
+				isTsumego: false,
+				isSVG: false
+			};
+
+			return output;
+		},
+
+		initialState: function(){
+
+			//init as joseki or SVG here
+
+			return {
+				moves: [], 
+				currentPlayer: "black",
+				groups: [],
+				stones: [],
+				prisoners: {
+					black: 0,
+					white: 0
+				}
+			}
+		},
+
+		cache: { 
+
+			store: function(item){
+
+			this.history == undefined ? this.history = [] : false;
+			this.history.push(item);
+			},
+
+			load: function(n){
+				return this.history[n];
+			},
+
+			clear: function(){
+				this.history = [];
+			}
+		}
+	}
+
+	const CanvasRenderer = function(container, canvas, options) {
+
+		this.container = container;
+		this.canvas = canvas;
+		this.setup(options);
+	}
+
+	CanvasRenderer.prototype = {
+
+		render: function(boardstate) {
+
+			this.resize();
+			this.gsize = boardstate.mode.gsize;
+			this.coords = this.getCoords(boardstate);
+			this.currentState = boardstate;
+
+			const _this = this;
+
+			let cnvs = this.canvas,
+			    cxt = cnvs.getContext("2d"),
+			    coords = this.getCoords(boardstate);
+
+			let unit = (cnvs.width * 0.9) / (boardstate.state.gsize - 1);
+			let start = cnvs.width / 20;
+
+			const drawBoard = function(){
+
+				cxt.globalAlpha = 1;
+				cxt.fillStyle = "#EDE08B";
+
+				cxt.fillRect(0,0,cnvs.width,cnvs.height);
+
+				cxt.fillStyle = "#000000";
+
+				for(let i = 0;i < boardstate.mode.gsize; i++){
+
+					cxt.fillRect(start + ( i * (cnvs.width / 20) ), start, 1, cnvs.height * 0.9);
+					cxt.fillRect(start, start + (i * (cnvs.height / 20)), cnvs.width * 0.9, 1);
+				}
+
+			}
+
+			const drawStone = function(stone){
+
+				cxt.globalAlpha = 1;
+				cxt.fillStyle = stone.color;
+
+				cxt.beginPath();
+				cxt.arc(_this.coords.coords[stone.move].x,_this.coords.coords[stone.move].y, _this.coords.rad, 0, 2 * Math.PI);
+				cxt.fill();
+			}
+
+			let drawTerritory = function(state){
+
+				//TODO
+			}
+
+			!boardstate.state.stones ? boardstate.state.stones = [] : false;
+
+			drawBoard();
+
+			for(let stone of boardstate.state.stones){
+
+				drawStone(stone);
+			}
+
+
+			boardstate.state.isOver == true ? drawTerritory(state) : false;
+
+		},
+
+		renderHov: function(point, color){
+
+			const cnvs = this.canvas;
+			const cxt = cnvs.getContext('2d');
+
+			cxt.globalAlpha = 0.5;
+			cxt.fillStyle = color;
+			cxt.beginPath();
+			cxt.arc(point.x, point.y, this.coords.rad, 0, 2 * Math.PI);
+			cxt.fill();
+
+		},
+
+		resize: function(){
+
+			this.canvas.width = this.container.clientWidth;
+			this.canvas.height = this.container.clientHeight;
+		},
+
+		getCoords : function(){
+
+			let unit = this.canvas.width * 0.9 / (this.gsize - 1),
+				start = 0 + this.canvas.width / 20,
+				count = 0,
+				coords = [];
+
+			for(let i = 0; i < this.gsize * this.gsize; i++){
+
+				coords[i] = {};
+
+				coords[i].x = start + ( unit * (i % this.gsize) );
+				coords[i].y = start + ( unit * Math.floor(i / 19) );
+			}	
+
+			let output = {
+
+				coords: coords,
+				rad: unit / 2
+			};
+
+			return output;
+		},
+
+		getPoint: function(x, y){
+
+			let count = 0;
+
+			for(point of this.coords.coords){
+				if(point.x == x && point.y == y){
+					return count;
+				}
+				count++;
+			}
+
+			return false;
+		},
+
+		eventListener: function(self, evt){
+
+			const _this = this;
+
+			const getMousePos = function(self, evt){
+
+				let box = self.getBoundingClientRect();
+				return {
+					x: evt.clientX - box.left,
+					y: evt.clientY - box.top
+				}
+			}
+
+			const detCollide = function(x, y, r){
+
+				for(point of _this.coords.coords){
+
+					let xn = x - point.x,
+						yn = y - point.y;
+
+					if(xn * xn + yn * yn <= r + 50){
+						return point;
+					}
+				}
+			}
+
+			let pos = getMousePos(self, evt);
+			let hit = detCollide(pos.x, pos.y, this.coords.rad);
+
+			if(!hit){
+				return false;
+			}
+			else{
+				this.render(this.currentState);
+				return hit;
+			}
+		},
+
+		setup: function(){
+
+			this.canvas.addEventListener('mousemove', e => {
+				let point = this.eventListener(this.canvas, e);
+				point ? this.renderHov(point, this.currentState.state.currentPlayer) : false;
+			});
+		}
+	}
+
+	let Board = new BoardState({});
+	let Renderer = new CanvasRenderer(document.getElementById("target"), document.getElementById("board"), undefined);
+	
+	Renderer.canvas.addEventListener('mouseup', e =>{
+		let point = Renderer.eventListener(Renderer.canvas, e);
+
+		if(point){	
+
+			let n = Renderer.getPoint(point.x, point.y);
+		
+			let state = new BoardState({
+				mode: Renderer.currentState.mode, 
+				state: Renderer.currentState.state
+			}).play(n);
+
+			Renderer.render(state);
+		}
+	});
+
+	Renderer.render(Board);
+
+	</script>
+</body>
+
+</html>
+
